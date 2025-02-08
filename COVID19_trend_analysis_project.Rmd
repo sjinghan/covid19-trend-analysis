@@ -1,0 +1,22 @@
+---
+title: "COVID-19 Trend Analysis"
+---
+
+```{r}
+library(tidyverse)
+data <- read_csv("owid-covid-data.csv")
+print(data)
+```
+
+```{r}
+library(dplyr)
+selected_data <- data |>
+  select(location, date, new_cases, new_deaths)
+
+# head(selected_data)
+
+new_cases_col <- data$new_cases
+head(new_cases_col)
+
+
+```
