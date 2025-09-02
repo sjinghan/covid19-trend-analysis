@@ -1,0 +1,307 @@
+---
+title: "Healthcare System Capacity and COVID‑19 Mortality Analysis"
+author: "Jinghan Sun"
+date: "March 2, 2025"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Healthcare System Capacity and COVID-19 Mortality
+
+## Introduction
+
+This project uses the **Our World in Data (OWID) COVID-19 dataset**, a comprehensive open dataset that documents the global impact of the COVID-19 pandemic. It includes a wide range of indicators such as confirmed cases and deaths, testing, hospital capacity, demographics, and vaccination progress.
+
+The dataset covers the period from **January 1, 2020** to **June 17, 2024**, after which it is no longer updated. During the pandemic, the OWID team provided daily updates and developed dedicated data sets on testing and vaccination. Their **COVID-19 Data Explorer** became a widely used reference for tracking the spread of the disease and informing public health responses, research, and policy.
+
+The data used here were downloaded on 01/03/2025.
+
+## Loading Required Libraries
+
+```{r load-libraries}
+# Load required packages
+library(tidyverse)    # For data manipulation and visualization
+library(lubridate)    # For handling dates
+library(ggplot2)      # For creating visualizations
+library(RColorBrewer) # For color palettes
+```
+
+## Data Import and Initial Exploration
+
+First, we'll import the COVID‑19 dataset and explore its structure.\
+After loading, we convert the `date` column to a proper Date object and check some basic characteristics of the dataset.
+
+```{r import-data}
+# Import the COVID‑19 dataset
+covid_data <- read.csv("owid-covid-data.csv")
+
+# Convert date to proper date format
+covid_data$date <- as.Date(covid_data$date)
+
+# Number of observations and variables
+dim(covid_data)
+
+# Date range covered by the data
+range(covid_data$date)
+
+# Check the number of countries in the dataset
+length(unique(covid_data$location))
+
+# Look at the healthcare capacity variable
+summary(covid_data$hospital_beds_per_thousand)
+```
+
+**Dataset overview.**\
+The dataset contains **429,435** observations across **255** countries. Hospital bed capacity per thousand people ranges from **0.1** to **13.8**.
+
+## Intuitive Predictions
+
+Before analyzing the data, we formulate some hypotheses:
+
+1.  Countries with higher hospital bed capacity per capita will experience lower COVID‑19 mortality rates.\
+2.  There exists a critical threshold of healthcare system utilization beyond which mortality rates increase dramatically.\
+3.  The relationship between healthcare capacity and mortality will be influenced by demographic factors, particularly age structure.
+
+## Data Cleaning and Preparation
+
+We need to clean the data to ensure it is suitable for our analysis.\
+We begin by identifying missing values in key variables and creating a cleaned dataset with derived variables.
+
+```{r data-cleaning}
+# Check for missing values in key variables
+missing_values <- colSums(is.na(covid_data[, c("hospital_beds_per_thousand", 
+                                       "total_deaths_per_million",
+                                       "icu_patients_per_million")]))
+print(missing_values)
+
+# Clean and prepare the dataset
+clean_covid <- covid_data %>%
+  # Filter out aggregated entities (like continents, world, etc.)
+  filter(!is.na(continent)) %>%
+  # Create healthcare capacity categories
+  mutate(
+    # Create a simple 7-day moving average for deaths if needed
+    deaths_weekly_avg = if("new_deaths_smoothed_per_million" %in% names(.)) 
+                           new_deaths_smoothed_per_million 
+                        else 
+                           new_deaths_per_million,
+    
+    # Create healthcare capacity categories
+    healthcare_capacity = case_when(
+      is.na(hospital_beds_per_thousand) ~ "Unknown",
+      hospital_beds_per_thousand < 2 ~ "Low",
+      hospital_beds_per_thousand < 4 ~ "Medium",
+      hospital_beds_per_thousand >= 4 ~ "High",
+      TRUE ~ "Unknown"
+    )
+  )
+
+# Create a country-level summary for easier analysis
+country_summary <- clean_covid %>%
+  group_by(location, continent) %>%
+  summarise(
+    hospital_beds = mean(hospital_beds_per_thousand, na.rm = TRUE),
+    max_deaths_per_million = max(total_deaths_per_million, na.rm = TRUE),
+    median_age = mean(median_age, na.rm = TRUE),
+    healthcare_capacity = first(na.omit(healthcare_capacity)),
+    .groups = "drop"
+  ) %>%
+  # Remove countries with missing data
+  filter(!is.na(hospital_beds) & !is.na(max_deaths_per_million) & !is.infinite(max_deaths_per_million))
+
+# Check our prepared dataset
+head(country_summary)
+```
+
+**Data preparation summary.**\
+We filter out aggregates (e.g., continents and the world), calculate a 7‑day smoothed death rate where available, categorize countries by healthcare capacity (Low, Medium, High), and summarizes the data at the country level.\
+Countries lacking necessary data on hospital beds or mortality rates are excluded from further analysis.
+
+## Data Visualization
+
+### 1. Relationship Between Hospital Beds and Mortality Rates
+
+Let's visualise the relationship between hospital beds per thousand people and maximum COVID‑19 death rates.
+
+```{r beds-mortality-plot}
+# Create scatter plot of hospital beds vs mortality
+ggplot(country_summary, aes(x = hospital_beds, y = max_deaths_per_million)) +
+  geom_point(aes(color = continent), size = 3, alpha = 0.7) +
+  geom_smooth(method = "loess", se = TRUE, color = "darkred") +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "Hospital Beds per Thousand vs. COVID-19 Mortality",
+    x = "Hospital Beds per 1,000 Population",
+    y = "Maximum Deaths per Million",
+    color = "Continent"
+  ) +
+  theme_minimal()
+```
+
+**Description**
+
+The scatter plot measures hospital bed supply to maximum deaths per million, with countries colored by continent. The Red curve shows a non-linear relationship, with mortality rising as bed capacity increases up to approximately 6-7 beds per 1,000, then decreases for countries with very high capacity.
+
+Low-capacity nations, mostly African and Oceanic, tend to cluster around the origin with low mortality, whereas Europe and parts of South America cluster at moderate bed capacity and high mortality. The curve proceeds downward at higher capacities indicates that beyond a certain threshold, abundant beds may lead to better outcomes, but capacity alone does not explain the wide variation seen across continents.
+
+### 2. Healthcare Capacity Categories and Mortality Distribution
+
+Next, we examine how mortality rates are distributed across different healthcare capacity categories.
+
+```{r capacity-categories-boxplot}
+# Create boxplot of mortality by healthcare capacity category
+ggplot(country_summary, aes(x = healthcare_capacity, y = max_deaths_per_million)) +
+  geom_boxplot(aes(fill = healthcare_capacity)) +
+  geom_jitter(width = 0.2, alpha = 0.4) +
+  scale_fill_brewer(palette = "Blues") +
+  labs(
+    title = "COVID-19 Mortality by Healthcare System Capacity",
+    x = "Healthcare System Capacity",
+    y = "Maximum Deaths per Million",
+    fill = "Capacity Level"
+  ) +
+  theme_minimal()
+```
+
+**Description**
+
+The boxplots summarize the distribution of mortality rates by capacity category. Low-capacity countries show low medians and relatively tight interquartile ranges, and that high-capacity countries have a higher median and wider spread, including outliers. Medium-capacity countries sit between the two.
+
+The significant variability among high-capacity countries hint that they differ widely in other characteristics, such as age structure, underlying health conditions, and policy responses. The absence of a clear order among medians (low, medium, high) suggests that capacity along does not determine mortality.
+
+### 3. Comparing Mortality Rates Across Continents
+
+Now, let's compare mortality rates across different continents and healthcare capacities.
+
+```{r continent-comparison}
+# Create a grouped bar chart of mortality by continent and healthcare capacity
+ggplot(country_summary, aes(x = continent, y = max_deaths_per_million)) +
+  geom_bar(stat = "summary", fun = "mean", aes(fill = healthcare_capacity), position = "dodge") +
+  scale_fill_brewer(palette = "Blues") +
+  labs(
+    title = "Average COVID-19 Mortality by Continent and Healthcare Capacity",
+    x = "Continent",
+    y = "Average Maximum Deaths per Million",
+    fill = "Healthcare Capacity"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+**Description**
+
+This grouped bar chart compares average maximum deaths per million across continents and healthcare capacity categories. Europe and South America standout with significantly higher average mortality rates despite varied capacity levels. Asian and Oceania show much lower averages.
+
+Certain orderings of categories remain counter-intuitive: for example, medium-capacity countries within North American and South America have higher mortality than either high- or low-capacity peers. Overall, there is no consistent pattern where higher capacity systematically leads to lower mortality, regional context appears to matter more.
+
+### 4. Exploring the Impact of Age Demographics
+
+Let's examine how the age structure of populations affects mortality rates.
+
+```{r age-mortality-plot}
+cor_val <- cor(country_summary$median_age, 
+               country_summary$max_deaths_per_million, 
+               use = "complete.obs", 
+               method = "pearson")
+
+print(paste("Correlation coefficient (r):", cor_val))
+
+# Create scatter plot of median age vs mortality
+ggplot(country_summary, aes(x = median_age, y = max_deaths_per_million)) +
+  geom_point(aes(color = healthcare_capacity, size = hospital_beds), alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkred") +
+  scale_color_brewer(palette = "Blues") +
+  labs(
+    title = "Median Age vs. COVID-19 Mortality",
+    subtitle = "Point size represents hospital beds per thousand",
+    x = "Median Age of Population",
+    y = "Maximum Deaths per Million",
+    color = "Healthcare Capacity",
+    size = "Hospital Beds"
+  ) +
+  theme_minimal()
+```
+
+**Description**
+
+Within this scatter plot, median age on the x-axis and maximum deaths per million on the y axis. The size of registered data points reflects hospital beds per thousand. The fitted line (red) travels upward, with a correlation coefficient of **0.65**, indicating strong positive correlation between median age and COVID-19 mortality.
+
+### 5. Simple Mortality Rate Comparison
+
+Finally, we create a simple bar chart showing the countries with the highest mortality rates.
+
+```{r top-mortality-countries}
+# Get top 15 countries by mortality rate
+top_mortality <- country_summary %>%
+  arrange(desc(max_deaths_per_million)) %>%
+  head(15)
+
+# Create bar chart of top mortality countries
+ggplot(top_mortality, aes(x = reorder(location, max_deaths_per_million), y = max_deaths_per_million)) +
+  geom_bar(stat = "identity", aes(fill = healthcare_capacity)) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Blues") +
+  labs(
+    title = "Countries with Highest COVID-19 Mortality Rates",
+    x = "Country",
+    y = "Maximum Deaths per Million",
+    fill = "Healthcare Capacity"
+  ) +
+  theme_minimal()
+```
+
+**Description**
+
+The horizontal bar chart listed the fifteen countries with the highest recorded mortality per million. The list composed mainly of European countries such as Bulgaria, North Macedonia, Hungary and Czech. Peru appears at the top while considered low capacity. Several countries with high healthcare capacity - like Slovenia and Croatia - still exhibit very high mortality, while medium-capacity countries such as Bosnia and Georgia also rank high.
+
+The mix of capacity tiers among the worst-affected countries shows that a strong healthcare system does not, by itself, prevent high mortality if other factors are unfavorable.
+
+## Conclusions
+
+This analysis asked whether countries with greater healthcare capacity (hospital beds per 1,000 people) experienced lower COVID-19 mortality, and how that relationship varied across regions and by age structure.
+
+-   **Age structure is the strongest single signal in the EDA.** The *median age vs. mortality* plot shows a clear upward trend, and the computed correlation between median age and maximum deaths every million is ***r = 0.65***, a strong positive association. Older populations consistently experienced higher mortality, regardless of capacity category.
+
+-   **Capacity alone is insufficient to explain cross-country mortality.** Within the *capacity boxplots and continent* $\times$ capacity bars, there is no consistent gradient where "High" capacity countries always out-performing the "Low" capacity countries. Variability within the High and Medium groups is large, and several Medium-capacity settings perform worse than Low-capacity peers. 
+
+- **Non-linear relationship between beds and mortality.** The *beds-per-1k scatter plot* suggests an **Inverted U-shape**. This indicates mortality rises from very low to mid-range bed levels, then declines at the highest levels. This descriptive pattern cautions against assuming a simple linear effect of bed supply on outcomes. 
+
+- **Strong regional heterogeneity.** The *continent comparison* shows Europe and South America with the highest average morality, while *Asia and Oceania* are generally lower. The *top-mortality countries* chart is dominated by European countries, with Peru as a non-European outlier. This regional clustering implies that factors beyond bed supply likely shaped outcomes. 
+
+**Original hypotheses revisited**
+1. *Higher bed capacity leads to lower mortality*: ***not supported*** from a monotonic perspective. 
+2. *threshold/overload effects*: ***partially consistent*** with the observed inverted-U pattern, however, descriptive only. 
+3. *Demographics matter*: supported, the strong positive correlation $r = 0.65$ and the scatter trend indicate age structures is a key driver. 
+
+## Limitations
+- **Outcome choice: Using**: maximum deaths per million is sensitive to reporting spikes and revisions. Simultaneously, the exact time of waves could also be producing unwanted effects. A single bad week can drastically change a country's placement. 
+
+- **Category cutoffs**: te Low/Medium/High capacity bins are arbitrary, and can obscure inter-group variation. Results can change with different thresholds. 
+
+- **Unmeasured factors**: policy strengths, vaccination rates, prior health records, income, and variant mix all affect mortality but are not controlled within the scope of the analysis. 
+
+- **Missing data handling**: multiple variables have gaps. Simple filtering and averages can bias results if missingness is widespread. 
+
+## Next Steps
+
+1. **Replace maximum deaths per million with**: 
+  - 7-day smoothed peak deaths per million
+  - Cumulative deaths per million to a common cutoff date, 
+  - Excess mortality
+
+2. **Build a multivariable model** with: 
+  - Median age (age standardization if available)
+  - Vaccination coverage (both peak and cumulative), booster, 
+  - Policy stringency, mobility, GDP per capita, 
+  - Health system quality proxies
+
+3. **Robustness & Sensitivity Improvements**: 
+  - Re-run analyses with alternative capacity cutoffs and with capacity as a continuous variable,, excluding micro states/small populations, and on separate variant periods. 
+  - Use continent/region random effects to account for unobserved regional factors. 
+  - Attempt long-transforming mortality to reduce skew and outlier effects. 
