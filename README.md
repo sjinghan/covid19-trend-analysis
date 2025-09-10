@@ -1,6 +1,6 @@
 # Healthcare System Capacity and COVID-19 Mortality Analysis
 
-**Author:** Jinghan Sun
+**Author:** Jinghan Sun  <br>
 **Last updated:** May 2, 2025
 
 ## Abstract
